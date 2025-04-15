@@ -1,125 +1,200 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:html_unescape/html_unescape.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(MyApp());
+}
+
+class Question {
+  final String question;
+  final List<String> options;
+  final String correctAnswer;
+
+  Question({
+    required this.question,
+    required this.options,
+    required this.correctAnswer,
+  });
+
+  factory Question.fromJson(Map<String, dynamic> json) {
+    final unescape = HtmlUnescape();
+    List<String> options = List<String>.from(json['incorrect_answers'])
+        .map((opt) => unescape.convert(opt))
+        .toList();
+
+    final correct = unescape.convert(json['correct_answer']);
+    options.add(correct);
+    options.shuffle();
+
+    return Question(
+      question: unescape.convert(json['question']),
+      options: options,
+      correctAnswer: correct,
+    );
+  }
+}
+
+
+class ApiService {
+  static Future<List<Question>> fetchQuestions() async {
+    final response = await http.get(
+      Uri.parse('https://opentdb.com/api.php?amount=10&category=9&difficulty=easy&type=multiple'),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return (data['results'] as List)
+          .map((questionData) => Question.fromJson(questionData))
+          .toList();
+    } else {
+      throw Exception('Failed to load questions');
+    }
+  }
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'Trivia Quiz App',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: QuizScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class QuizScreen extends StatefulWidget {
+  const QuizScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  _QuizScreenState createState() => _QuizScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _QuizScreenState extends State<QuizScreen> {
+  List<Question> _questions = [];
+  int _currentQuestionIndex = 0;
+  int _score = 0;
+  bool _loading = true;
+  bool _answered = false;
+  String _selectedAnswer = "";
+  String _feedbackText = "";
 
-  void _incrementCounter() {
+  @override
+  void initState() {
+    super.initState();
+    _loadQuestions();
+  }
+
+  Future<void> _loadQuestions() async {
+    try {
+      final questions = await ApiService.fetchQuestions();
+      setState(() {
+        _questions = questions;
+        _loading = false;
+      });
+    } catch (e) {
+      print(e);
+    }
+  }
+
+  void _submitAnswer(String selectedAnswer) {
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _answered = true;
+      _selectedAnswer = selectedAnswer;
+
+      final correctAnswer = _questions[_currentQuestionIndex].correctAnswer;
+      if (selectedAnswer == correctAnswer) {
+        _score++;
+        _feedbackText = "✅ Correct! The answer is $correctAnswer.";
+      } else {
+        _feedbackText = "❌ Incorrect. The correct answer is $correctAnswer.";
+      }
     });
+  }
+
+  void _nextQuestion() {
+    setState(() {
+      _answered = false;
+      _selectedAnswer = "";
+      _feedbackText = "";
+      _currentQuestionIndex++;
+    });
+  }
+
+  Widget _buildOptionButton(String option) {
+    return ElevatedButton(
+      onPressed: _answered ? null : () => _submitAnswer(option),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.blue,
+        foregroundColor: Colors.white,
+      ),
+      child: Text(option),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    if (_loading) {
+      return Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_currentQuestionIndex >= _questions.length) {
+      return Scaffold(
+        body: Center(
+          child: Text(
+            '🎉 Quiz Finished!\nYour Score: $_score/${_questions.length}',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+        ),
+      );
+    }
+
+    final question = _questions[_currentQuestionIndex];
+
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      appBar: AppBar(title: Text('Quiz App')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
             Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+              'Question ${_currentQuestionIndex + 1}/${_questions.length}',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
             ),
+            SizedBox(height: 16),
+            Text(
+              question.question,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+            ),
+            SizedBox(height: 24),
+            ...question.options.map((option) => _buildOptionButton(option)),
+            SizedBox(height: 20),
+            if (_answered)
+              Text(
+                _feedbackText,
+                style: TextStyle(
+                  fontSize: 16,
+                  color: _selectedAnswer == question.correctAnswer
+                      ? Colors.green
+                      : Colors.red,
+                ),
+              ),
+            if (_answered)
+              ElevatedButton(
+                onPressed: _nextQuestion,
+                child: Text('Next Question'),
+              ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
